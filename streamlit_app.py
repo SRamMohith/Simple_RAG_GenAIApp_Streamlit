@@ -22,16 +22,15 @@ st.header("Chat with your PDF")
 st.markdown('Please upload a PDF (not scaned) and after few backend processing tasks you can start asking your queries. Smaller file sizes are reccommended for faster results. The LLM will answer the queries based on the PDF. Note that the LLM is aware of your previous conversations in this session so you can ask queries based on that as well. The chat histroy will not be saved for your next visit.')
 
 with st.sidebar:
-  st.markdown('Please enter your [Groq](https://groq.com/) and [HuggingFace](https://huggingface.co/) API keys.\nIf you donot have one please create them by visiting their website')
-  groq_api = st.text_input(label='Give your Groq API',type='password',value=os.environ.get("GROQ_API_KEY", None) or ss.get("GROQ_API_KEY", ""))
-  HF_token = st.text_input(label='Give your HuggingFace Token',type='password',value=os.environ.get("HF_TOKEN", None) or ss.get("HF_TOKEN", ""))
-  session_id = st.text_input(label='Give an ID for your session (will not be saved for next visit)')
+  st.markdown('Please enter your [Groq](https://groq.com/) API key to chat with the LLM.\nIf you donot have one please create them by visiting the website')
+  groq_api = st.text_input(label='Enter your Groq API key',type='password',value=os.environ.get("GROQ_API_KEY", None) or ss.get("GROQ_API_KEY", ""))
+  session_id = st.text_input(label='Give an name for your session (will not be saved for next visit)')
   llm_name = st.selectbox('Select model',('gemma2-9b-it','gemma-7b-it','llama3-70b-8192','llama3-8b-8192'))
 
 if not groq_api:
   st.warning('Enter your Groq API')
-if not HF_token:
-  st.warning('Enter your HF token')
+
+os.environ['HF_TOKEN']=os.getenv("HF_TOKEN")
 
 uploaded_file = st.file_uploader("Upload pdf",type=["pdf"],help="Scanned documents are not supported yet!")
 
@@ -42,7 +41,7 @@ if uploaded_file:
   llm = ChatGroq(model_name=llm_name,groq_api_key=groq_api)
 
   loader = PyPDFLoader(uploaded_file.name)
-  st.write('Please wait! Few backend tasks in process...')
+  st.write('Please wait! Few background tasks in process...')
   document = loader.load()
   splitter = RecursiveCharacterTextSplitter(chunk_size=1000,chunk_overlap=100)
   docs = splitter.split_documents(document)
