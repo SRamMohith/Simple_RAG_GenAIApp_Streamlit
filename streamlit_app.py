@@ -29,7 +29,7 @@ with st.sidebar:
   llm_name = st.selectbox('Select model',('gemma2-9b-it','gemma-7b-it','llama3-70b-8192','llama3-8b-8192'))
 
 if not groq_api:
-  st.warning('Enter your Grop API')
+  st.warning('Enter your Groq API')
 if not HF_token:
   st.warning('Enter your HF token')
 
