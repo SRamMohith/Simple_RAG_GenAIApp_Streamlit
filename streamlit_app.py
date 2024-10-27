@@ -1,11 +1,10 @@
 import streamlit as st
 from streamlit import session_state as ss
 import os
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 from langchain_groq import ChatGroq
+from content_extract import load_document
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains import create_retrieval_chain
@@ -16,36 +15,36 @@ from langchain_core.messages import HumanMessage,AIMessage
 from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_community.chat_message_histories import ChatMessageHistory
 from langchain_core.runnables.history import RunnableWithMessageHistory
-load_dotenv()
+load_dotenv(find_dotenv())
 
-st.header("Chat with your PDF")
-st.markdown('Please upload a PDF (not scaned) and after few backend processing tasks you can start asking your queries. Smaller file sizes are reccommended for faster results. The LLM will answer the queries based on the PDF. Note that the LLM is aware of your previous queries in this session so you can have continous conversations with it. The chat histroy will not be saved for your next visit.')
+st.header("Simple GenAI Chatbot")
+st.markdown('Please set your source and after a few processing tasks you can start using the chatbot. Smaller sources are reccommended for faster results. The LLM will try to answer the queries based on the source. The chat histroy will not be saved for your next visit.')
 
 with st.sidebar:
   st.markdown('Please enter your [Groq](https://groq.com/) API key to connect with the LLM.\nIf you donot have one please create by visiting the website')
   groq_api = st.text_input(label='Enter your Groq API key',type='password',value=os.environ.get("GROQ_API_KEY", None) or ss.get("GROQ_API_KEY", ""))
-  session_id = st.text_input(label='Give an name for your session (will not be saved for next visit)')
+  session_id = st.text_input(label='Session Name (will not be saved for next visit)')
   llm_name = st.selectbox('Select LLM',('llama3-8b-8192','gemma-7b-it','llama3-70b-8192','gemma2-9b-it'))
+  source_type = st.selectbox('Type of source',('Web link','PDF'),index=None)
+  if source_type=='Web link':
+    source = st.text_input(label='Link')
+  elif source_type=='PDF':
+    source = st.file_uploader("Upload pdf",type=["pdf"],help="Scanned documents are not supported yet!")
 
+check = True
 if not groq_api:
-  st.warning('Enter your Groq API')
+  st.warning('Enter your Groq API in the sidebar')
+  check=False
+if (not source_type) or (not source):
+  st.warning('Set your source information in the sidebar')
+  check=False
 
-os.environ['HF_TOKEN']=os.getenv("HF_TOKEN")
-
-uploaded_file = st.file_uploader("Upload pdf",type=["pdf"],help="Scanned documents are not supported yet!")
-
-if uploaded_file:
-  with open(uploaded_file.name, mode='wb') as w:
-    w.write(uploaded_file.getvalue())
-
+if check:
   llm = ChatGroq(model_name=llm_name,groq_api_key=groq_api)
 
-  loader = PyPDFLoader(uploaded_file.name)
-  st.write('Please wait! Few background tasks in process...')
-  document = loader.load()
-  splitter = RecursiveCharacterTextSplitter(chunk_size=2000,chunk_overlap=250)
-  docs = splitter.split_documents(document)
+  docs = load_document(source_type,source)
 
+  os.environ['HF_TOKEN']=os.getenv("HF_TOKEN")
   embedd = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
   vectorstore = FAISS.from_documents(documents=docs,embedding=embedd)
   retriever = vectorstore.as_retriever(search_kwargs={'k':3})
@@ -53,44 +52,52 @@ if uploaded_file:
   if 'store' not in ss:
     ss.store = {}
 
-  system_prompt = 'You are an assistant for Q&A tasks. Use the following peices of retrived context to answer the users quires precisely and concisely. If you cannot answer anything please mention it.\n{context}'
-  context_q_sys_prompt = "Given a chat history and the latest user question which might reference context in the chat history, formulate a standalone question which can be understood without the chat history. Do NOT answer the question, just reformulate it if needed and otherwise return it as is."
-  context_q_prompt = ChatPromptTemplate.from_messages([
-      ('system',context_q_sys_prompt),
-      MessagesPlaceholder('chat_history'),
-      ('human','{input}')
-  ])
-  hist_aware_retriver = create_history_aware_retriever(llm,retriever,context_q_prompt)
+  if 'messages' not in ss:
+    ss['messages'] = [
+      {'role':'assistant','content':'Hi! How can I help you today?'}
+    ]
 
-  qa_prompt = ChatPromptTemplate.from_messages([
-      ('system',system_prompt),
-      MessagesPlaceholder('chat_history'),
-      ('human','{input}')
-  ])
-  qa_chain = create_stuff_documents_chain(llm,qa_prompt)
-  rag_chain = create_retrieval_chain(hist_aware_retriver,qa_chain)
+  for msg in ss["messages"]:
+    st.chat_message(msg['role']).write(msg['content'])
 
-  def get_chat_history(session_id)->BaseChatMessageHistory:
-    if session_id not in ss.store:
-      ss.store[session_id] = ChatMessageHistory()
-    return ss.store[session_id]
+  if inp:=st.chat_input():
+    ss['messages'].append({'role':'user','content':inp})
+    st.chat_message('user').write(inp)
 
-  conv_rag_chain = RunnableWithMessageHistory(
-      rag_chain,get_chat_history,
-      input_messages_key='input',
-      history_messages_key='chat_history',
-      output_messages_key='answer'
-  )
-  st.write('All done you are set to ask your queries!')
-  inp = st.text_input('Your query')
-  if inp:
-    session_hist = get_chat_history(session_id)
-    response = conv_rag_chain.invoke(
-        {'input':inp},
-        config = {'configurable':{'session_id':session_id}}
+    system_prompt = 'You are an assistant for Q&A tasks. Use the following peices of retrived context to answer the users quires. You can answer the queries without using this context as well but please mention that your not using the context information to answer.  If you cannot answer anything please mention it.\n{context}'
+    context_q_sys_prompt = "Given a chat history and the latest user question which might reference context in the chat history, formulate a standalone question which can be understood without the chat history. Do NOT answer the question, just reformulate it if needed and otherwise return it as is."
+    context_q_prompt = ChatPromptTemplate.from_messages([
+        ('system',context_q_sys_prompt),
+        MessagesPlaceholder('chat_history'),
+        ('human','{input}')
+    ])
+    hist_aware_retriver = create_history_aware_retriever(llm,retriever,context_q_prompt)
+
+    qa_prompt = ChatPromptTemplate.from_messages([
+        ('system',system_prompt),
+        MessagesPlaceholder('chat_history'),
+        ('human','{input}')
+    ])
+    qa_chain = create_stuff_documents_chain(llm,qa_prompt)
+    rag_chain = create_retrieval_chain(hist_aware_retriver,qa_chain)
+
+    def get_chat_history(session_id)->BaseChatMessageHistory:
+      if session_id not in ss.store:
+        ss.store[session_id] = ChatMessageHistory()
+      return ss.store[session_id]
+
+    conv_rag_chain = RunnableWithMessageHistory(
+        rag_chain,get_chat_history,
+        input_messages_key='input',
+        history_messages_key='chat_history',
+        output_messages_key='answer'
     )
-    st.write('Assistant: ',response['answer'])
+    
+    response = conv_rag_chain.invoke(
+      {'input':inp},
+      config = {'configurable':{'session_id':session_id}}
+    )
+    st.chat_message('assistant').write(response['answer'])
+    ss['messages'].append({'role':'assistant','content':response['answer']})
 else:
   st.stop()
-
-

@@ -9,3 +9,4 @@ langchain_huggingface
 faiss-cpu
 pypdf
 streamlit
+bs4
